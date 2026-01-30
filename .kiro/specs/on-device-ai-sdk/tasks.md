@@ -221,19 +221,19 @@ This implementation plan breaks down the on-device AI SDK development into discr
     - Enforce context window limits
     - _Requirements: 1.8, 1.9, 24.1, 24.3, 24.4, 24.5_
   
-  - [-] 5.11 Write property test for context window enforcement
+  - [x] 5.11 Write property test for context window enforcement
     - **Property 4: Context Window Enforcement**
     - **Validates: Requirements 1.8**
     - Generate random prompts of varying lengths
     - Verify total tokens never exceed model's context limit
   
-  - [~] 5.12 Write property test for conversation context persistence
+  - [x] 5.12 Write property test for conversation context persistence
     - **Property 21: Conversation Context Persistence**
     - **Validates: Requirements 24.1**
     - Generate random conversation sequences
     - Verify later requests can reference earlier exchanges
   
-  - [~] 5.13 Write unit tests for LLM engine
+  - [x] 5.13 Write unit tests for LLM engine
     - Test loading different quantization levels
     - Test generation with various configs
     - Test streaming cancellation
@@ -242,21 +242,21 @@ This implementation plan breaks down the on-device AI SDK development into discr
     - _Requirements: 1.4, 1.5, 12.4, 24.3, 24.5_
 
 - [ ] 6. STT Engine Implementation
-  - [~] 6.1 Integrate whisper.cpp backend
+  - [x] 6.1 Integrate whisper.cpp backend
     - Add whisper.cpp as dependency
     - Create wrapper for whisper.cpp C API
     - Implement model loading for Whisper models
     - Support model variants (tiny, base, small, medium)
     - _Requirements: 2.1, 2.6, 19.2_
   
-  - [~] 6.2 Implement audio preprocessing
+  - [x] 6.2 Implement audio preprocessing
     - Create AudioData structure with PCM samples
     - Implement audio resampling to required sample rate
     - Implement audio normalization
     - Add conversion from WAV format
     - _Requirements: 2.2, 25.1, 25.2, 25.3, 25.6_
   
-  - [~] 6.3 Implement transcription functionality
+  - [x] 6.3 Implement transcription functionality
     - Create transcribe() method with TranscriptionConfig
     - Implement language detection and specification
     - Return transcriptions with confidence scores
@@ -264,20 +264,20 @@ This implementation plan breaks down the on-device AI SDK development into discr
     - Handle multiple languages
     - _Requirements: 2.1, 2.3, 2.4, 25.1, 25.2_
   
-  - [~] 6.4 Write property test for transcription confidence scores
+  - [x] 6.4 Write property test for transcription confidence scores
     - **Property 5: Transcription Confidence Scores**
     - **Validates: Requirements 2.4**
     - Generate random audio inputs
     - Verify all transcriptions include confidence in [0.0, 1.0]
   
-  - [~] 6.5 Implement Voice Activity Detection
+  - [x] 6.5 Implement Voice Activity Detection
     - Implement detectVoiceActivity() method
     - Detect speech segments vs silence
     - Return AudioSegment list with timestamps
     - Configure VAD threshold
     - _Requirements: 2.5_
   
-  - [~] 6.6 Write unit tests for STT engine
+  - [x] 6.6 Write unit tests for STT engine
     - Test transcription of clean speech
     - Test multi-language support
     - Test VAD on silence and speech
@@ -286,14 +286,14 @@ This implementation plan breaks down the on-device AI SDK development into discr
     - _Requirements: 2.1, 2.3, 2.5, 2.6, 25.1, 25.2_
 
 - [ ] 7. TTS Engine Implementation
-  - [~] 7.1 Integrate ONNX Runtime for TTS
+  - [x] 7.1 Integrate ONNX Runtime for TTS
     - Add ONNX Runtime as dependency
     - Create wrapper for ONNX Runtime C++ API
     - Implement model loading for ONNX TTS models
     - Configure execution providers (CPU, GPU)
     - _Requirements: 3.1, 19.4_
   
-  - [~] 7.2 Implement text-to-speech synthesis
+  - [x] 7.2 Implement text-to-speech synthesis
     - Create synthesize() method with SynthesisConfig
     - Implement text preprocessing
     - Generate audio waveforms using ONNX model
@@ -301,19 +301,19 @@ This implementation plan breaks down the on-device AI SDK development into discr
     - Output in PCM and WAV formats
     - _Requirements: 3.1, 3.3, 3.5, 25.4, 25.5_
   
-  - [~] 7.3 Write property test for TTS parameter effects
+  - [x] 7.3 Write property test for TTS parameter effects
     - **Property 6: TTS Parameter Effects**
     - **Validates: Requirements 3.3**
     - Generate random text inputs
     - Verify different speed/pitch produce different audio
   
-  - [~] 7.4 Implement multi-voice support
+  - [x] 7.4 Implement multi-voice support
     - Implement getAvailableVoices() method
     - Support voice selection in synthesis
     - Handle multiple languages
     - _Requirements: 3.4_
   
-  - [~] 7.5 Write unit tests for TTS engine
+  - [x] 7.5 Write unit tests for TTS engine
     - Test synthesis with different voices
     - Test speed and pitch parameters
     - Test PCM and WAV output formats
@@ -321,33 +321,33 @@ This implementation plan breaks down the on-device AI SDK development into discr
     - _Requirements: 3.4, 3.5, 25.4, 25.5_
 
 - [ ] 8. Voice Pipeline Implementation
-  - [~] 8.1 Implement Voice Pipeline orchestration
+  - [x] 8.1 Implement Voice Pipeline orchestration
     - Create VoicePipeline class
     - Implement configure() with STT, LLM, TTS models
     - Orchestrate STT → LLM → TTS flow
     - Manage conversation state and history
     - _Requirements: 4.1, 4.3, 4.4, 4.5, 4.6_
   
-  - [~] 8.2 Implement conversation management
+  - [x] 8.2 Implement conversation management
     - Implement startConversation() with callbacks
     - Integrate VAD for speech detection
     - Maintain conversation history
     - Implement clearHistory() and getHistory()
     - _Requirements: 4.2, 4.6, 24.2, 24.3, 24.4_
   
-  - [~] 8.3 Write property test for voice pipeline context maintenance
+  - [x] 8.3 Write property test for voice pipeline context maintenance
     - **Property 7: Voice Pipeline Context Maintenance**
     - **Validates: Requirements 4.6, 24.1**
     - Generate random conversation sequences
     - Verify each turn has access to previous context
   
-  - [~] 8.4 Implement interruption and cancellation
+  - [x] 8.4 Implement interruption and cancellation
     - Implement stopConversation() method
     - Implement interrupt() to stop TTS playback
     - Clean up resources on cancellation
     - _Requirements: 4.7, 4.8, 15.4_
   
-  - [~] 8.5 Write unit tests for voice pipeline
+  - [x] 8.5 Write unit tests for voice pipeline
     - Test end-to-end voice conversation
     - Test VAD speech detection
     - Test conversation history maintenance
@@ -355,69 +355,69 @@ This implementation plan breaks down the on-device AI SDK development into discr
     - _Requirements: 4.1, 4.2, 4.7, 4.8_
 
 - [ ] 9. Error Handling and Validation
-  - [~] 9.1 Implement error types and codes
+  - [x] 9.1 Implement error types and codes
     - Create Error structure with code, message, details, recovery suggestion
     - Define all error categories and specific codes
     - Implement Result<T> template for error propagation
     - _Requirements: 13.1, 13.2_
   
-  - [~] 9.2 Write property test for error messages
+  - [x] 9.2 Write property test for error messages
     - **Property 16: Error Messages Include Description**
     - **Validates: Requirements 13.1**
     - Generate random error conditions
     - Verify all errors include non-empty descriptions
   
-  - [~] 9.3 Write property test for error-specific failure reasons
+  - [x] 9.3 Write property test for error-specific failure reasons
     - **Property 17: Error-Specific Failure Reasons**
     - **Validates: Requirements 13.3**
     - Generate different model loading failures
     - Verify different causes produce different error codes/messages
   
-  - [~] 9.4 Implement input validation across all APIs
+  - [x] 9.4 Implement input validation across all APIs
     - Add parameter validation to all public methods
     - Return validation errors before attempting operations
     - Validate ranges, null checks, format checks
     - _Requirements: 13.5, 16.7_
   
-  - [~] 9.5 Write property test for input validation
+  - [x] 9.5 Write property test for input validation
     - **Property 19: Input Validation Before Execution**
     - **Validates: Requirements 13.5, 16.7**
     - Generate random invalid inputs
     - Verify validation errors returned without execution
   
-  - [~] 9.6 Implement error recovery and cleanup
+  - [x] 9.6 Implement error recovery and cleanup
     - Ensure SDK remains usable after errors
     - Clean up resources on error paths
     - Implement retry logic for transient errors
     - _Requirements: 13.4, 13.6_
   
-  - [~] 9.7 Write property test for SDK usable after error
+  - [x] 9.7 Write property test for SDK usable after error
     - **Property 18: SDK Usable After Error**
     - **Validates: Requirements 13.4**
     - Generate random inference errors
     - Verify subsequent operations succeed
 
 - [ ] 10. Thread Safety and Concurrency
-  - [~] 10.1 Implement thread-safe resource access
+  - [x] 10.1 Implement thread-safe resource access
     - Add mutex protection for shared resources
     - Implement thread-safe model loading
     - Implement thread-safe inference on different models
     - Serialize access to same model instance
     - _Requirements: 14.1, 14.2, 14.3, 14.4_
   
-  - [~] 10.2 Write property test for concurrent access data integrity
+  - [x] 10.2 Write property test for concurrent access data integrity
     - **Property 20: Concurrent Access Data Integrity**
     - **Validates: Requirements 14.4**
     - Generate random concurrent access patterns
     - Verify model state remains consistent (no corruption)
   
-  - [~] 10.3 Implement callback thread management
+  - [x] 10.3 Implement callback thread management
     - Ensure callbacks invoked on appropriate threads
     - Implement thread-safe callback queues
     - Add callback thread configuration
     - _Requirements: 12.5, 14.5_
   
-  - [~] 10.4 Write unit tests for concurrency
+  - [x] 10.4 Write unit tests for concurrency
     - Test concurrent model loading
     - Test concurrent inference on different models
     - Test callback thread identity

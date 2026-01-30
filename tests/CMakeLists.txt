@@ -30,12 +30,22 @@ add_executable(ondeviceai_tests
     unit/model_versioning_test.cpp
     unit/llm_engine_test.cpp
     unit/llm_engine_integration_test.cpp
+    unit/llm_engine_unit_test.cpp
     unit/stt_engine_test.cpp
     unit/tts_engine_test.cpp
+    unit/tts_multi_voice_test.cpp
+    unit/tts_comprehensive_test.cpp
     unit/voice_pipeline_test.cpp
+    unit/voice_pipeline_comprehensive_test.cpp
     unit/memory_manager_test.cpp
     unit/logger_test.cpp
     unit/lru_cache_integration_test.cpp
+    unit/audio_preprocessing_test.cpp
+    unit/error_handling_test.cpp
+    unit/input_validation_test.cpp
+    unit/error_recovery_test.cpp
+    unit/callback_threading_test.cpp
+    unit/concurrency_test.cpp
 )
 
 target_link_libraries(ondeviceai_tests

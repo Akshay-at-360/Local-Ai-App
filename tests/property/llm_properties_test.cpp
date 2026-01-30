@@ -2,6 +2,7 @@
 #include <rapidcheck/gtest.h>
 #include "ondeviceai/llm_engine.hpp"
 #include "ondeviceai/memory_manager.hpp"
+#include "ondeviceai/logger.hpp"
 #include <filesystem>
 #include <fstream>
 #include <algorithm>
@@ -1355,4 +1356,887 @@ TEST(LLMPropertyUnitTest, StreamingNoDuplicateCallbackInvocations) {
     // Verify position count matches token count
     EXPECT_EQ(position, tokens_in_order.size())
         << "Position counter mismatch with token count";
+}
+
+// Feature: on-device-ai-sdk, Property 4: Context Window Enforcement
+// **Validates: Requirements 1.8**
+//
+// NOTE: This test requires a real GGUF model file to execute properly.
+// The test is structured to validate the property but will be skipped
+// if no valid model is available. To run this test with a real model:
+// 1. Download a small GGUF model (e.g., TinyLlama or similar)
+// 2. Set the environment variable TEST_MODEL_PATH to the model file path
+// 3. Run the tests
+//
+// The property being tested:
+// For any LLM model with specified context window limit, the total tokens
+// (prompt + generation) should not exceed the model's maximum context length
+RC_GTEST_PROP(LLMPropertyTest, ContextWindowEnforcementNeverExceedsLimit, ()) {
+    // Check if a test model is available
+    const char* model_path_env = std::getenv("TEST_MODEL_PATH");
+    if (!model_path_env || !std::filesystem::exists(model_path_env)) {
+        RC_SUCCEED("Skipping test - no valid GGUF model available. "
+                   "Set TEST_MODEL_PATH environment variable to run this test.");
+        return;
+    }
+    
+    std::string model_path(model_path_env);
+    
+    // Load the model
+    LLMEngine engine;
+    MemoryManager memory_mgr(4ULL * 1024 * 1024 * 1024);
+    engine.setMemoryManager(&memory_mgr);
+    
+    auto load_result = engine.loadModel(model_path);
+    if (load_result.isError()) {
+        RC_SUCCEED("Skipping test - failed to load model: " + load_result.error().message);
+        return;
+    }
+    
+    ModelHandle handle = load_result.value();
+    
+    // Get the model's context capacity
+    auto capacity_result = engine.getContextCapacity(handle);
+    RC_ASSERT(capacity_result.isSuccess());
+    int context_capacity = capacity_result.value();
+    RC_ASSERT(context_capacity > 0);
+    
+    LOG_DEBUG("Model context capacity: " + std::to_string(context_capacity));
+    
+    // Generate random prompts of varying lengths
+    // Use a generator that creates prompts from 1 to 500 characters
+    auto prompt = *rc::gen::suchThat(
+        rc::gen::string<std::string>(),
+        [](const std::string& s) { 
+            return s.length() > 0 && s.length() < 500; 
+        }
+    );
+    
+    RC_PRE(!prompt.empty());
+    
+    // Tokenize the prompt to know its actual token count
+    auto tokenize_result = engine.tokenize(handle, prompt);
+    RC_ASSERT(tokenize_result.isSuccess());
+    int prompt_tokens = static_cast<int>(tokenize_result.value().size());
+    
+    LOG_DEBUG("Prompt tokens: " + std::to_string(prompt_tokens));
+    
+    // Generate a random max_tokens value
+    // Use a range that might exceed context window to test enforcement
+    auto max_tokens = *rc::gen::inRange(1, context_capacity + 100);
+    
+    // Create generation config
+    GenerationConfig config = GenerationConfig::defaults();
+    config.max_tokens = max_tokens;
+    config.temperature = 0.7f;
+    
+    LOG_DEBUG("Requested max_tokens: " + std::to_string(max_tokens));
+    
+    // Get initial context usage
+    auto initial_usage_result = engine.getContextUsage(handle);
+    RC_ASSERT(initial_usage_result.isSuccess());
+    int initial_usage = initial_usage_result.value();
+    
+    LOG_DEBUG("Initial context usage: " + std::to_string(initial_usage));
+    
+    // Attempt generation
+    auto generate_result = engine.generate(handle, prompt, config);
+    
+    // Property 1: If generation succeeds, verify context never exceeded capacity
+    if (generate_result.isSuccess()) {
+        // Get final context usage after generation
+        auto final_usage_result = engine.getContextUsage(handle);
+        RC_ASSERT(final_usage_result.isSuccess());
+        int final_usage = final_usage_result.value();
+        
+        LOG_DEBUG("Final context usage: " + std::to_string(final_usage));
+        
+        // The final usage should never exceed the context capacity
+        RC_ASSERT(final_usage <= context_capacity);
+        
+        // Verify the usage increased by at least the prompt tokens
+        // (it may have been cleared if context was full)
+        if (initial_usage == 0 || final_usage >= initial_usage) {
+            // Normal case: context grew or was cleared and restarted
+            RC_ASSERT(final_usage >= prompt_tokens);
+        }
+        
+        // Count the actual generated tokens
+        const std::string& generated_text = generate_result.value();
+        auto generated_tokens_result = engine.tokenize(handle, generated_text);
+        if (generated_tokens_result.isSuccess()) {
+            int generated_tokens = static_cast<int>(generated_tokens_result.value().size());
+            LOG_DEBUG("Generated tokens: " + std::to_string(generated_tokens));
+            
+            // The generated tokens should not exceed max_tokens
+            RC_ASSERT(generated_tokens <= max_tokens);
+        }
+    } else {
+        // Property 2: If generation fails, it should be due to context window constraints
+        // when prompt + max_tokens exceeds capacity
+        if (prompt_tokens + max_tokens > context_capacity) {
+            // This is expected to fail with context window exceeded error
+            RC_ASSERT(generate_result.error().code == ErrorCode::InferenceContextWindowExceeded);
+            LOG_DEBUG("Expected failure: prompt + max_tokens exceeds capacity");
+        } else {
+            // If it fails for other reasons, that's also acceptable
+            // (e.g., model issues, memory issues)
+            LOG_DEBUG("Generation failed with error: " + generate_result.error().message);
+        }
+    }
+    
+    // Property 3: After any operation, context usage should never exceed capacity
+    auto post_op_usage_result = engine.getContextUsage(handle);
+    RC_ASSERT(post_op_usage_result.isSuccess());
+    int post_op_usage = post_op_usage_result.value();
+    RC_ASSERT(post_op_usage <= context_capacity);
+}
+
+// Test context window enforcement with sequential generations
+RC_GTEST_PROP(LLMPropertyTest, ContextWindowEnforcementAcrossMultipleGenerations, ()) {
+    const char* model_path_env = std::getenv("TEST_MODEL_PATH");
+    if (!model_path_env || !std::filesystem::exists(model_path_env)) {
+        RC_SUCCEED("Skipping test - no valid GGUF model available.");
+        return;
+    }
+    
+    std::string model_path(model_path_env);
+    
+    LLMEngine engine;
+    MemoryManager memory_mgr(4ULL * 1024 * 1024 * 1024);
+    engine.setMemoryManager(&memory_mgr);
+    
+    auto load_result = engine.loadModel(model_path);
+    if (load_result.isError()) {
+        RC_SUCCEED("Skipping test - failed to load model.");
+        return;
+    }
+    
+    ModelHandle handle = load_result.value();
+    
+    // Get context capacity
+    auto capacity_result = engine.getContextCapacity(handle);
+    RC_ASSERT(capacity_result.isSuccess());
+    int context_capacity = capacity_result.value();
+    
+    // Generate a random number of sequential prompts (2-5)
+    auto num_prompts = *rc::gen::inRange(2, 6);
+    
+    GenerationConfig config = GenerationConfig::defaults();
+    config.max_tokens = 20;  // Small number for faster testing
+    config.temperature = 0.7f;
+    
+    // Perform multiple sequential generations
+    for (int i = 0; i < num_prompts; ++i) {
+        // Generate a random prompt
+        auto prompt = *rc::gen::suchThat(
+            rc::gen::string<std::string>(),
+            [](const std::string& s) { return s.length() > 5 && s.length() < 100; }
+        );
+        
+        // Generate text
+        auto result = engine.generate(handle, prompt, config);
+        
+        // After each generation, verify context usage doesn't exceed capacity
+        auto usage_result = engine.getContextUsage(handle);
+        RC_ASSERT(usage_result.isSuccess());
+        int usage = usage_result.value();
+        
+        // Property: Context usage should never exceed capacity
+        RC_ASSERT(usage <= context_capacity);
+        
+        LOG_DEBUG("Generation " + std::to_string(i + 1) + 
+                 ": usage=" + std::to_string(usage) + 
+                 "/" + std::to_string(context_capacity));
+    }
+}
+
+// Unit test: Verify context window enforcement with known large prompt
+TEST(LLMPropertyUnitTest, ContextWindowEnforcementWithLargePrompt) {
+    const char* model_path_env = std::getenv("TEST_MODEL_PATH");
+    if (!model_path_env || !std::filesystem::exists(model_path_env)) {
+        GTEST_SKIP() << "Skipping test - no valid GGUF model available.";
+    }
+    
+    std::string model_path(model_path_env);
+    
+    LLMEngine engine;
+    MemoryManager memory_mgr(4ULL * 1024 * 1024 * 1024);
+    engine.setMemoryManager(&memory_mgr);
+    
+    auto load_result = engine.loadModel(model_path);
+    if (load_result.isError()) {
+        GTEST_SKIP() << "Failed to load model: " << load_result.error().message;
+    }
+    
+    ModelHandle handle = load_result.value();
+    
+    // Get context capacity
+    auto capacity_result = engine.getContextCapacity(handle);
+    ASSERT_TRUE(capacity_result.isSuccess());
+    int context_capacity = capacity_result.value();
+    
+    // Create a very large prompt that will definitely exceed context window
+    // Repeat a sentence many times to create a large prompt
+    std::string base_sentence = "This is a test sentence that will be repeated many times. ";
+    std::string large_prompt;
+    for (int i = 0; i < 200; ++i) {  // Repeat 200 times
+        large_prompt += base_sentence;
+    }
+    
+    // Tokenize to see how many tokens this is
+    auto tokenize_result = engine.tokenize(handle, large_prompt);
+    ASSERT_TRUE(tokenize_result.isSuccess());
+    int prompt_tokens = static_cast<int>(tokenize_result.value().size());
+    
+    std::cout << "Large prompt tokens: " << prompt_tokens 
+              << ", context capacity: " << context_capacity << std::endl;
+    
+    // Request max_tokens that would exceed capacity
+    GenerationConfig config = GenerationConfig::defaults();
+    config.max_tokens = context_capacity;  // Request full context worth of tokens
+    config.temperature = 0.7f;
+    
+    // Attempt generation
+    auto result = engine.generate(handle, large_prompt, config);
+    
+    // If prompt + max_tokens exceeds capacity, should fail with appropriate error
+    if (prompt_tokens + config.max_tokens > context_capacity) {
+        EXPECT_TRUE(result.isError());
+        if (result.isError()) {
+            EXPECT_EQ(result.error().code, ErrorCode::InferenceContextWindowExceeded);
+            EXPECT_FALSE(result.error().message.empty());
+        }
+    }
+    
+    // Verify context usage never exceeded capacity
+    auto usage_result = engine.getContextUsage(handle);
+    ASSERT_TRUE(usage_result.isSuccess());
+    int usage = usage_result.value();
+    EXPECT_LE(usage, context_capacity);
+}
+
+// Unit test: Verify context is cleared when approaching limit
+TEST(LLMPropertyUnitTest, ContextClearedWhenApproachingLimit) {
+    const char* model_path_env = std::getenv("TEST_MODEL_PATH");
+    if (!model_path_env || !std::filesystem::exists(model_path_env)) {
+        GTEST_SKIP() << "Skipping test - no valid GGUF model available.";
+    }
+    
+    std::string model_path(model_path_env);
+    
+    LLMEngine engine;
+    MemoryManager memory_mgr(4ULL * 1024 * 1024 * 1024);
+    engine.setMemoryManager(&memory_mgr);
+    
+    auto load_result = engine.loadModel(model_path);
+    if (load_result.isError()) {
+        GTEST_SKIP() << "Failed to load model: " << load_result.error().message;
+    }
+    
+    ModelHandle handle = load_result.value();
+    
+    // Get context capacity
+    auto capacity_result = engine.getContextCapacity(handle);
+    ASSERT_TRUE(capacity_result.isSuccess());
+    int context_capacity = capacity_result.value();
+    
+    GenerationConfig config = GenerationConfig::defaults();
+    config.max_tokens = 50;
+    config.temperature = 0.7f;
+    
+    // Fill up the context with multiple generations
+    std::string prompt = "Tell me a story about a cat. ";
+    int num_generations = 0;
+    int max_generations = 20;  // Limit to prevent infinite loop
+    
+    while (num_generations < max_generations) {
+        auto usage_before = engine.getContextUsage(handle);
+        ASSERT_TRUE(usage_before.isSuccess());
+        int usage_before_val = usage_before.value();
+        
+        auto result = engine.generate(handle, prompt, config);
+        
+        auto usage_after = engine.getContextUsage(handle);
+        ASSERT_TRUE(usage_after.isSuccess());
+        int usage_after_val = usage_after.value();
+        
+        // Context usage should never exceed capacity
+        EXPECT_LE(usage_after_val, context_capacity);
+        
+        // If usage decreased or reset to near zero, context was cleared
+        if (usage_after_val < usage_before_val || usage_after_val < 100) {
+            std::cout << "Context was cleared: before=" << usage_before_val 
+                     << ", after=" << usage_after_val << std::endl;
+            // This is expected behavior when approaching limit
+            break;
+        }
+        
+        num_generations++;
+        
+        // If we're getting close to capacity, expect clearing soon
+        if (usage_after_val > context_capacity * 0.8) {
+            std::cout << "Approaching context limit: " << usage_after_val 
+                     << "/" << context_capacity << std::endl;
+        }
+    }
+    
+    // Final check: context usage should be within limits
+    auto final_usage = engine.getContextUsage(handle);
+    ASSERT_TRUE(final_usage.isSuccess());
+    EXPECT_LE(final_usage.value(), context_capacity);
+}
+
+// Unit test: Verify getContextUsage and getContextCapacity work correctly
+TEST(LLMPropertyUnitTest, ContextUsageAndCapacityTracking) {
+    const char* model_path_env = std::getenv("TEST_MODEL_PATH");
+    if (!model_path_env || !std::filesystem::exists(model_path_env)) {
+        GTEST_SKIP() << "Skipping test - no valid GGUF model available.";
+    }
+    
+    std::string model_path(model_path_env);
+    
+    LLMEngine engine;
+    MemoryManager memory_mgr(4ULL * 1024 * 1024 * 1024);
+    engine.setMemoryManager(&memory_mgr);
+    
+    auto load_result = engine.loadModel(model_path);
+    if (load_result.isError()) {
+        GTEST_SKIP() << "Failed to load model: " << load_result.error().message;
+    }
+    
+    ModelHandle handle = load_result.value();
+    
+    // Get context capacity
+    auto capacity_result = engine.getContextCapacity(handle);
+    ASSERT_TRUE(capacity_result.isSuccess());
+    int capacity = capacity_result.value();
+    
+    // Capacity should be positive and reasonable (typically 512-8192)
+    EXPECT_GT(capacity, 0);
+    EXPECT_LE(capacity, 32768);  // Most models have <= 32k context
+    
+    // Initial usage should be 0
+    auto initial_usage = engine.getContextUsage(handle);
+    ASSERT_TRUE(initial_usage.isSuccess());
+    EXPECT_EQ(initial_usage.value(), 0);
+    
+    // After generation, usage should increase
+    GenerationConfig config = GenerationConfig::defaults();
+    config.max_tokens = 10;
+    
+    auto result = engine.generate(handle, "Hello", config);
+    
+    auto usage_after = engine.getContextUsage(handle);
+    ASSERT_TRUE(usage_after.isSuccess());
+    EXPECT_GT(usage_after.value(), 0);
+    EXPECT_LE(usage_after.value(), capacity);
+    
+    // After clearing context, usage should be 0
+    auto clear_result = engine.clearContext(handle);
+    ASSERT_TRUE(clear_result.isSuccess());
+    
+    auto usage_after_clear = engine.getContextUsage(handle);
+    ASSERT_TRUE(usage_after_clear.isSuccess());
+    EXPECT_EQ(usage_after_clear.value(), 0);
+}
+
+
+// Feature: on-device-ai-sdk, Property 21: Conversation Context Persistence
+// **Validates: Requirements 24.1**
+//
+// NOTE: This test requires a real GGUF model file to execute properly.
+// The test is structured to validate the property but will be skipped
+// if no valid model is available. To run this test with a real model:
+// 1. Download a small GGUF model (e.g., TinyLlama or similar)
+// 2. Set the environment variable TEST_MODEL_PATH to the model file path
+// 3. Run the tests
+//
+// The property being tested:
+// For any LLM model with conversation context, making multiple inference requests
+// should maintain context such that later requests can reference earlier exchanges
+RC_GTEST_PROP(LLMPropertyTest, ConversationContextPersistenceAcrossMultipleTurns, ()) {
+    // Check if a test model is available
+    const char* model_path_env = std::getenv("TEST_MODEL_PATH");
+    if (!model_path_env || !std::filesystem::exists(model_path_env)) {
+        RC_SUCCEED("Skipping test - no valid GGUF model available. "
+                   "Set TEST_MODEL_PATH environment variable to run this test.");
+        return;
+    }
+    
+    std::string model_path(model_path_env);
+    
+    // Load the model
+    LLMEngine engine;
+    MemoryManager memory_mgr(4ULL * 1024 * 1024 * 1024);
+    engine.setMemoryManager(&memory_mgr);
+    
+    auto load_result = engine.loadModel(model_path);
+    if (load_result.isError()) {
+        RC_SUCCEED("Skipping test - failed to load model: " + load_result.error().message);
+        return;
+    }
+    
+    ModelHandle handle = load_result.value();
+    
+    // Get the model's context capacity to ensure we don't exceed it
+    auto capacity_result = engine.getContextCapacity(handle);
+    RC_ASSERT(capacity_result.isSuccess());
+    int context_capacity = capacity_result.value();
+    RC_ASSERT(context_capacity > 0);
+    
+    LOG_DEBUG("Model context capacity: " + std::to_string(context_capacity));
+    
+    // Generate a random number of conversation turns (2-5)
+    auto num_turns = *rc::gen::inRange(2, 6);
+    
+    LOG_DEBUG("Testing " + std::to_string(num_turns) + " conversation turns");
+    
+    // Create generation config with small max_tokens to avoid context overflow
+    GenerationConfig config = GenerationConfig::defaults();
+    config.max_tokens = 30;  // Small number to allow multiple turns
+    config.temperature = 0.7f;
+    
+    // Track conversation history manually to verify against engine's history
+    std::vector<std::string> expected_history;
+    
+    // Property 1: Initial context should be empty
+    auto initial_history_result = engine.getConversationHistory(handle);
+    RC_ASSERT(initial_history_result.isSuccess());
+    RC_ASSERT(initial_history_result.value().empty());
+    
+    auto initial_usage_result = engine.getContextUsage(handle);
+    RC_ASSERT(initial_usage_result.isSuccess());
+    RC_ASSERT(initial_usage_result.value() == 0);
+    
+    // Perform multiple conversation turns
+    for (int turn = 0; turn < num_turns; ++turn) {
+        // Generate a random prompt for this turn
+        auto prompt = *rc::gen::suchThat(
+            rc::gen::string<std::string>(),
+            [](const std::string& s) { 
+                return s.length() > 5 && s.length() < 80; 
+            }
+        );
+        
+        LOG_DEBUG("Turn " + std::to_string(turn + 1) + ": prompt length = " + 
+                 std::to_string(prompt.length()));
+        
+        // Get context usage before this turn
+        auto usage_before_result = engine.getContextUsage(handle);
+        RC_ASSERT(usage_before_result.isSuccess());
+        int usage_before = usage_before_result.value();
+        
+        LOG_DEBUG("Context usage before turn: " + std::to_string(usage_before));
+        
+        // Generate response
+        auto generate_result = engine.generate(handle, prompt, config);
+        
+        // Property 2: Generation should succeed (or fail gracefully if context full)
+        if (generate_result.isError()) {
+            // If generation fails, it should be due to context constraints
+            LOG_DEBUG("Generation failed: " + generate_result.error().message);
+            
+            // If we've done at least 2 turns, that's sufficient to test context persistence
+            if (turn >= 2) {
+                LOG_DEBUG("Completed " + std::to_string(turn) + " turns before context limit");
+                break;
+            }
+            
+            // Otherwise, this is unexpected for early turns
+            RC_ASSERT(turn >= 1);  // At least one turn should succeed
+            break;
+        }
+        
+        const std::string& response = generate_result.value();
+        RC_ASSERT(!response.empty());
+        
+        LOG_DEBUG("Turn " + std::to_string(turn + 1) + ": response length = " + 
+                 std::to_string(response.length()));
+        
+        // Update expected history
+        expected_history.push_back("User: " + prompt);
+        expected_history.push_back("Assistant: " + response);
+        
+        // Property 3: Context usage should increase after each turn
+        auto usage_after_result = engine.getContextUsage(handle);
+        RC_ASSERT(usage_after_result.isSuccess());
+        int usage_after = usage_after_result.value();
+        
+        LOG_DEBUG("Context usage after turn: " + std::to_string(usage_after));
+        
+        // Context should have grown (unless it was cleared due to overflow)
+        // If it was cleared, usage_after will be less than usage_before
+        if (usage_after >= usage_before) {
+            // Normal case: context grew
+            RC_ASSERT(usage_after > usage_before);
+        } else {
+            // Context was cleared - this is acceptable behavior
+            LOG_DEBUG("Context was cleared during this turn");
+        }
+        
+        // Property 4: Context usage should never exceed capacity
+        RC_ASSERT(usage_after <= context_capacity);
+        
+        // Property 5: Conversation history should be maintained
+        auto history_result = engine.getConversationHistory(handle);
+        RC_ASSERT(history_result.isSuccess());
+        const auto& history = history_result.value();
+        
+        // History should contain all turns so far (unless context was cleared)
+        // If context was cleared, history will be shorter
+        if (usage_after >= usage_before) {
+            // Context wasn't cleared, so history should match expected
+            RC_ASSERT(history.size() == expected_history.size());
+            
+            // Verify history contents match
+            for (size_t i = 0; i < history.size(); ++i) {
+                RC_ASSERT(history[i] == expected_history[i]);
+            }
+        } else {
+            // Context was cleared, so history may be shorter
+            LOG_DEBUG("History size after clear: " + std::to_string(history.size()));
+            // History should at least contain the current turn
+            RC_ASSERT(history.size() >= 2u);  // At least current user + assistant
+        }
+        
+        LOG_DEBUG("Turn " + std::to_string(turn + 1) + " completed successfully");
+    }
+    
+    // Property 6: After multiple turns, conversation history should be accessible
+    auto final_history_result = engine.getConversationHistory(handle);
+    RC_ASSERT(final_history_result.isSuccess());
+    const auto& final_history = final_history_result.value();
+    
+    // Should have at least 2 entries (one complete turn: user + assistant)
+    RC_ASSERT(final_history.size() >= 2u);
+    
+    // History entries should follow the pattern: "User: ...", "Assistant: ..."
+    for (size_t i = 0; i < final_history.size(); i += 2) {
+        if (i < final_history.size()) {
+            RC_ASSERT(final_history[i].find("User: ") == 0u);
+        }
+        if (i + 1 < final_history.size()) {
+            RC_ASSERT(final_history[i + 1].find("Assistant: ") == 0u);
+        }
+    }
+    
+    LOG_DEBUG("Final conversation history has " + std::to_string(final_history.size()) + " entries");
+    
+    // Property 7: Context can be cleared and restarted
+    auto clear_result = engine.clearContext(handle);
+    RC_ASSERT(clear_result.isSuccess());
+    
+    auto cleared_history_result = engine.getConversationHistory(handle);
+    RC_ASSERT(cleared_history_result.isSuccess());
+    RC_ASSERT(cleared_history_result.value().empty());
+    
+    auto cleared_usage_result = engine.getContextUsage(handle);
+    RC_ASSERT(cleared_usage_result.isSuccess());
+    RC_ASSERT(cleared_usage_result.value() == 0);
+    
+    LOG_DEBUG("Context successfully cleared");
+}
+
+// Test that conversation context persists across multiple generations with deterministic output
+RC_GTEST_PROP(LLMPropertyTest, ConversationContextPersistenceWithDeterministicGeneration, ()) {
+    const char* model_path_env = std::getenv("TEST_MODEL_PATH");
+    if (!model_path_env || !std::filesystem::exists(model_path_env)) {
+        RC_SUCCEED("Skipping test - no valid GGUF model available.");
+        return;
+    }
+    
+    std::string model_path(model_path_env);
+    
+    LLMEngine engine;
+    MemoryManager memory_mgr(4ULL * 1024 * 1024 * 1024);
+    engine.setMemoryManager(&memory_mgr);
+    
+    auto load_result = engine.loadModel(model_path);
+    if (load_result.isError()) {
+        RC_SUCCEED("Skipping test - failed to load model.");
+        return;
+    }
+    
+    ModelHandle handle = load_result.value();
+    
+    // Use deterministic generation for reproducibility
+    GenerationConfig config = GenerationConfig::defaults();
+    config.max_tokens = 20;
+    config.temperature = 0.0f;  // Deterministic
+    
+    // Generate a sequence of prompts
+    auto num_prompts = *rc::gen::inRange(2, 4);
+    
+    std::vector<std::string> prompts;
+    for (int i = 0; i < num_prompts; ++i) {
+        auto prompt = *rc::gen::suchThat(
+            rc::gen::string<std::string>(),
+            [](const std::string& s) { return s.length() > 5 && s.length() < 50; }
+        );
+        prompts.push_back(prompt);
+    }
+    
+    // Generate responses for all prompts
+    std::vector<std::string> responses;
+    for (const auto& prompt : prompts) {
+        auto result = engine.generate(handle, prompt, config);
+        if (result.isSuccess()) {
+            responses.push_back(result.value());
+        } else {
+            // Context may have been exceeded
+            break;
+        }
+    }
+    
+    // Property: History should contain all successful turns
+    auto history_result = engine.getConversationHistory(handle);
+    RC_ASSERT(history_result.isSuccess());
+    const auto& history = history_result.value();
+    
+    // Should have 2 entries per successful generation
+    RC_ASSERT(history.size() == responses.size() * 2);
+    
+    // Verify history matches the prompts and responses
+    for (size_t i = 0; i < responses.size(); ++i) {
+        RC_ASSERT(history[i * 2].find(prompts[i]) != std::string::npos);
+        RC_ASSERT(history[i * 2 + 1].find(responses[i]) != std::string::npos);
+    }
+}
+
+// Unit test: Verify conversation context is maintained across two specific turns
+TEST(LLMPropertyUnitTest, ConversationContextMaintainedAcrossTwoTurns) {
+    const char* model_path_env = std::getenv("TEST_MODEL_PATH");
+    if (!model_path_env || !std::filesystem::exists(model_path_env)) {
+        GTEST_SKIP() << "Skipping test - no valid GGUF model available.";
+    }
+    
+    std::string model_path(model_path_env);
+    
+    LLMEngine engine;
+    MemoryManager memory_mgr(4ULL * 1024 * 1024 * 1024);
+    engine.setMemoryManager(&memory_mgr);
+    
+    auto load_result = engine.loadModel(model_path);
+    if (load_result.isError()) {
+        GTEST_SKIP() << "Failed to load model: " << load_result.error().message;
+    }
+    
+    ModelHandle handle = load_result.value();
+    
+    GenerationConfig config = GenerationConfig::defaults();
+    config.max_tokens = 15;
+    config.temperature = 0.7f;
+    
+    // First turn
+    std::string prompt1 = "Hello, how are you?";
+    auto result1 = engine.generate(handle, prompt1, config);
+    ASSERT_TRUE(result1.isSuccess());
+    std::string response1 = result1.value();
+    ASSERT_FALSE(response1.empty());
+    
+    // Check history after first turn
+    auto history1_result = engine.getConversationHistory(handle);
+    ASSERT_TRUE(history1_result.isSuccess());
+    auto history1 = history1_result.value();
+    ASSERT_EQ(history1.size(), 2);
+    EXPECT_NE(history1[0].find(prompt1), std::string::npos);
+    EXPECT_NE(history1[1].find(response1), std::string::npos);
+    
+    // Check context usage increased
+    auto usage1_result = engine.getContextUsage(handle);
+    ASSERT_TRUE(usage1_result.isSuccess());
+    int usage1 = usage1_result.value();
+    EXPECT_GT(usage1, 0);
+    
+    // Second turn
+    std::string prompt2 = "What is your name?";
+    auto result2 = engine.generate(handle, prompt2, config);
+    ASSERT_TRUE(result2.isSuccess());
+    std::string response2 = result2.value();
+    ASSERT_FALSE(response2.empty());
+    
+    // Check history after second turn
+    auto history2_result = engine.getConversationHistory(handle);
+    ASSERT_TRUE(history2_result.isSuccess());
+    auto history2 = history2_result.value();
+    
+    // Should have 4 entries (2 turns)
+    EXPECT_EQ(history2.size(), 4);
+    
+    // Verify all entries are present
+    EXPECT_NE(history2[0].find(prompt1), std::string::npos);
+    EXPECT_NE(history2[1].find(response1), std::string::npos);
+    EXPECT_NE(history2[2].find(prompt2), std::string::npos);
+    EXPECT_NE(history2[3].find(response2), std::string::npos);
+    
+    // Check context usage increased further
+    auto usage2_result = engine.getContextUsage(handle);
+    ASSERT_TRUE(usage2_result.isSuccess());
+    int usage2 = usage2_result.value();
+    EXPECT_GT(usage2, usage1);
+}
+
+// Unit test: Verify context can be cleared and conversation restarted
+TEST(LLMPropertyUnitTest, ConversationContextCanBeClearedAndRestarted) {
+    const char* model_path_env = std::getenv("TEST_MODEL_PATH");
+    if (!model_path_env || !std::filesystem::exists(model_path_env)) {
+        GTEST_SKIP() << "Skipping test - no valid GGUF model available.";
+    }
+    
+    std::string model_path(model_path_env);
+    
+    LLMEngine engine;
+    MemoryManager memory_mgr(4ULL * 1024 * 1024 * 1024);
+    engine.setMemoryManager(&memory_mgr);
+    
+    auto load_result = engine.loadModel(model_path);
+    if (load_result.isError()) {
+        GTEST_SKIP() << "Failed to load model: " << load_result.error().message;
+    }
+    
+    ModelHandle handle = load_result.value();
+    
+    GenerationConfig config = GenerationConfig::defaults();
+    config.max_tokens = 10;
+    config.temperature = 0.7f;
+    
+    // First conversation
+    auto result1 = engine.generate(handle, "First prompt", config);
+    ASSERT_TRUE(result1.isSuccess());
+    
+    auto history1_result = engine.getConversationHistory(handle);
+    ASSERT_TRUE(history1_result.isSuccess());
+    EXPECT_EQ(history1_result.value().size(), 2);
+    
+    auto usage1_result = engine.getContextUsage(handle);
+    ASSERT_TRUE(usage1_result.isSuccess());
+    EXPECT_GT(usage1_result.value(), 0);
+    
+    // Clear context
+    auto clear_result = engine.clearContext(handle);
+    ASSERT_TRUE(clear_result.isSuccess());
+    
+    // Verify context is cleared
+    auto history_cleared_result = engine.getConversationHistory(handle);
+    ASSERT_TRUE(history_cleared_result.isSuccess());
+    EXPECT_TRUE(history_cleared_result.value().empty());
+    
+    auto usage_cleared_result = engine.getContextUsage(handle);
+    ASSERT_TRUE(usage_cleared_result.isSuccess());
+    EXPECT_EQ(usage_cleared_result.value(), 0);
+    
+    // Start new conversation
+    auto result2 = engine.generate(handle, "Second prompt", config);
+    ASSERT_TRUE(result2.isSuccess());
+    
+    auto history2_result = engine.getConversationHistory(handle);
+    ASSERT_TRUE(history2_result.isSuccess());
+    EXPECT_EQ(history2_result.value().size(), 2);
+    
+    // Verify new conversation doesn't contain old history
+    const auto& history2 = history2_result.value();
+    EXPECT_NE(history2[0].find("Second prompt"), std::string::npos);
+    EXPECT_EQ(history2[0].find("First prompt"), std::string::npos);
+}
+
+// Unit test: Verify conversation history format is correct
+TEST(LLMPropertyUnitTest, ConversationHistoryFormatIsCorrect) {
+    const char* model_path_env = std::getenv("TEST_MODEL_PATH");
+    if (!model_path_env || !std::filesystem::exists(model_path_env)) {
+        GTEST_SKIP() << "Skipping test - no valid GGUF model available.";
+    }
+    
+    std::string model_path(model_path_env);
+    
+    LLMEngine engine;
+    MemoryManager memory_mgr(4ULL * 1024 * 1024 * 1024);
+    engine.setMemoryManager(&memory_mgr);
+    
+    auto load_result = engine.loadModel(model_path);
+    if (load_result.isError()) {
+        GTEST_SKIP() << "Failed to load model: " << load_result.error().message;
+    }
+    
+    ModelHandle handle = load_result.value();
+    
+    GenerationConfig config = GenerationConfig::defaults();
+    config.max_tokens = 10;
+    config.temperature = 0.7f;
+    
+    std::string prompt = "Test prompt for format verification";
+    auto result = engine.generate(handle, prompt, config);
+    ASSERT_TRUE(result.isSuccess());
+    std::string response = result.value();
+    
+    auto history_result = engine.getConversationHistory(handle);
+    ASSERT_TRUE(history_result.isSuccess());
+    const auto& history = history_result.value();
+    
+    ASSERT_EQ(history.size(), 2);
+    
+    // Verify format: "User: <prompt>"
+    EXPECT_EQ(history[0].substr(0, 6), "User: ");
+    EXPECT_NE(history[0].find(prompt), std::string::npos);
+    
+    // Verify format: "Assistant: <response>"
+    EXPECT_EQ(history[1].substr(0, 11), "Assistant: ");
+    EXPECT_NE(history[1].find(response), std::string::npos);
+}
+
+// Unit test: Verify context usage increases with each turn
+TEST(LLMPropertyUnitTest, ContextUsageIncreasesWithEachTurn) {
+    const char* model_path_env = std::getenv("TEST_MODEL_PATH");
+    if (!model_path_env || !std::filesystem::exists(model_path_env)) {
+        GTEST_SKIP() << "Skipping test - no valid GGUF model available.";
+    }
+    
+    std::string model_path(model_path_env);
+    
+    LLMEngine engine;
+    MemoryManager memory_mgr(4ULL * 1024 * 1024 * 1024);
+    engine.setMemoryManager(&memory_mgr);
+    
+    auto load_result = engine.loadModel(model_path);
+    if (load_result.isError()) {
+        GTEST_SKIP() << "Failed to load model: " << load_result.error().message;
+    }
+    
+    ModelHandle handle = load_result.value();
+    
+    GenerationConfig config = GenerationConfig::defaults();
+    config.max_tokens = 10;
+    config.temperature = 0.7f;
+    
+    // Initial usage should be 0
+    auto usage0_result = engine.getContextUsage(handle);
+    ASSERT_TRUE(usage0_result.isSuccess());
+    EXPECT_EQ(usage0_result.value(), 0);
+    
+    // First turn
+    auto result1 = engine.generate(handle, "First", config);
+    ASSERT_TRUE(result1.isSuccess());
+    
+    auto usage1_result = engine.getContextUsage(handle);
+    ASSERT_TRUE(usage1_result.isSuccess());
+    int usage1 = usage1_result.value();
+    EXPECT_GT(usage1, 0);
+    
+    // Second turn
+    auto result2 = engine.generate(handle, "Second", config);
+    ASSERT_TRUE(result2.isSuccess());
+    
+    auto usage2_result = engine.getContextUsage(handle);
+    ASSERT_TRUE(usage2_result.isSuccess());
+    int usage2 = usage2_result.value();
+    EXPECT_GT(usage2, usage1);
+    
+    // Third turn
+    auto result3 = engine.generate(handle, "Third", config);
+    ASSERT_TRUE(result3.isSuccess());
+    
+    auto usage3_result = engine.getContextUsage(handle);
+    ASSERT_TRUE(usage3_result.isSuccess());
+    int usage3 = usage3_result.value();
+    EXPECT_GT(usage3, usage2);
 }

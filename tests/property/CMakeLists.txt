@@ -4,6 +4,13 @@ add_executable(ondeviceai_property_tests
     model_manager_properties_test.cpp
     memory_manager_properties_test.cpp
     llm_properties_test.cpp
+    stt_properties_test.cpp
+    tts_properties_test.cpp
+    voice_pipeline_properties_test.cpp
+    error_properties_test.cpp
+    input_validation_properties_test.cpp
+    sdk_recovery_properties_test.cpp
+    concurrency_properties_test.cpp
 )
 
 target_link_libraries(ondeviceai_property_tests
