@@ -1,0 +1,13 @@
+[requires]
+# Dependencies will be added as we integrate them
+# llama.cpp (will be added)
+# whisper.cpp (will be added)
+# onnxruntime (will be added)
+
+[generators]
+CMakeDeps
+CMakeToolchain
+
+[options]
+
+[imports]
