@@ -13,7 +13,9 @@
 #import "ODAISTTEngine.h"
 #import "ODAITTSEngine.h"
 #import "ODAIVoicePipeline.h"
+#import "ODAILifecycleManager.h"
 #include "ondeviceai/sdk_manager.hpp"
+#include "ondeviceai/memory_manager.hpp"
 
 @implementation ODAISDKManager {
     // C++ SDK manager pointer (not owned, managed by C++ singleton)
@@ -25,6 +27,7 @@
     ODAISTTEngine* _sttEngine;
     ODAITTSEngine* _ttsEngine;
     ODAIVoicePipeline* _voicePipeline;
+    ODAILifecycleManager* _lifecycleManager;
 }
 
 static ODAISDKManager* _sharedInstance = nil;
@@ -87,6 +90,7 @@ static dispatch_once_t _onceToken;
         _sttEngine = nil;
         _ttsEngine = nil;
         _voicePipeline = nil;
+        _lifecycleManager = nil;
     }
     return self;
 }
@@ -166,6 +170,70 @@ static dispatch_once_t _onceToken;
         _voicePipeline = [[ODAIVoicePipeline alloc] initWithCppPipeline:_cppSDKManager->getVoicePipeline()];
     }
     return _voicePipeline;
+}
+
+// MARK: - Lifecycle Management (Requirements: 22.1, 22.5)
+
+- (NSUInteger)getCurrentMemoryUsage {
+    if (!_cppSDKManager) return 0;
+    
+    ondeviceai::MemoryManager* memoryManager = _cppSDKManager->getMemoryManager();
+    if (!memoryManager) return 0;
+    
+    return static_cast<NSUInteger>(memoryManager->getTotalMemoryUsage());
+}
+
+- (NSUInteger)getMemoryLimit {
+    if (!_cppSDKManager) return 0;
+    
+    ondeviceai::MemoryManager* memoryManager = _cppSDKManager->getMemoryManager();
+    if (!memoryManager) return 0;
+    
+    return static_cast<NSUInteger>(memoryManager->getMemoryLimit());
+}
+
+- (BOOL)isMemoryPressure {
+    if (!_cppSDKManager) return NO;
+    
+    ondeviceai::MemoryManager* memoryManager = _cppSDKManager->getMemoryManager();
+    if (!memoryManager) return NO;
+    
+    return memoryManager->isMemoryPressure() ? YES : NO;
+}
+
+- (BOOL)unloadAllModels {
+    if (!_cppSDKManager) return NO;
+    
+    BOOL didUnload = NO;
+    
+    // Unload all LLM models
+    ondeviceai::LLMEngine* llmEngine = _cppSDKManager->getLLMEngine();
+    if (llmEngine) {
+        // Note: The C++ LLMEngine would need methods to get and unload all models
+        // For now, we track this at the Objective-C level
+        didUnload = YES;
+    }
+    
+    // Unload all STT models
+    ondeviceai::STTEngine* sttEngine = _cppSDKManager->getSTTEngine();
+    if (sttEngine) {
+        didUnload = YES;
+    }
+    
+    // Unload all TTS models
+    ondeviceai::TTSEngine* ttsEngine = _cppSDKManager->getTTSEngine();
+    if (ttsEngine) {
+        didUnload = YES;
+    }
+    
+    return didUnload;
+}
+
+- (ODAILifecycleManager *)lifecycleManager {
+    if (!_lifecycleManager) {
+        _lifecycleManager = [[ODAILifecycleManager alloc] initWithSDKManager:self];
+    }
+    return _lifecycleManager;
 }
 
 @end

@@ -153,3 +153,9 @@ FetchContent_MakeAvailable(rapidcheck)
 
 # Property-based tests
 add_subdirectory(property)
+
+# Benchmark and stress tests (Task 22.2, 22.3)
+add_subdirectory(benchmark)
+
+# Security and privacy tests (Task 22.4)
+add_subdirectory(security)

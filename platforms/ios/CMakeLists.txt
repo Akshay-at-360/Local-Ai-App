@@ -1,5 +1,5 @@
 # iOS Platform Bridge Layer
-# Requirements: 7.1, 7.8
+# Requirements: 7.1, 7.8, 22.1, 22.5
 
 # Objective-C++ bridge sources
 set(IOS_BRIDGE_SOURCES
@@ -7,6 +7,7 @@ set(IOS_BRIDGE_SOURCES
     ODAIBridgeTypes.mm
     ODAISDKManager.mm
     ODAIModelManager.mm
+    ODAILifecycleManager.mm
     # Additional engine implementations will be added in task 15.2
 )
 
@@ -20,6 +21,7 @@ set(IOS_BRIDGE_HEADERS
     ODAISTTEngine.h
     ODAITTSEngine.h
     ODAIVoicePipeline.h
+    ODAILifecycleManager.h
 )
 
 # Swift API layer sources
@@ -30,8 +32,14 @@ set(IOS_SWIFT_SOURCES
     STTEngine.swift
     TTSEngine.swift
     VoicePipeline.swift
+    LifecycleManager.swift
     Types.swift
     SDKError.swift
+)
+
+# Swift test sources (for iOS test bundle)
+set(IOS_SWIFT_TEST_SOURCES
+    LifecycleManagerTests.swift
 )
 
 # Create iOS bridge library

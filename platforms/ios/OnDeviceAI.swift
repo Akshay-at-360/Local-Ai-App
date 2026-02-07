@@ -41,6 +41,11 @@ public class OnDeviceAI {
         VoicePipeline(objcPipeline: objcManager.voicePipeline())
     }()
     
+    /// Lifecycle manager for handling iOS lifecycle events
+    public private(set) lazy var lifecycle: LifecycleManager = {
+        LifecycleManager(objcLifecycleManager: objcManager.lifecycleManager(), sdkManager: objcManager)
+    }()
+    
     // MARK: - Initialization
     
     private init(objcManager: ODAISDKManager) {
@@ -113,5 +118,29 @@ public class OnDeviceAI {
     /// - Parameter synchronous: true for synchronous callbacks, false for asynchronous
     public func setSynchronousCallbacks(_ synchronous: Bool) {
         objcManager.setSynchronousCallbacks(synchronous)
+    }
+    
+    // MARK: - Lifecycle Management Convenience Methods
+    
+    /// Start observing iOS lifecycle events
+    ///
+    /// This is a convenience method that calls `lifecycle.startObserving()`.
+    /// Should be called early in the app's lifecycle after SDK initialization.
+    public func startObservingLifecycleEvents() {
+        lifecycle.startObserving()
+    }
+    
+    /// Stop observing iOS lifecycle events
+    ///
+    /// This is a convenience method that calls `lifecycle.stopObserving()`.
+    public func stopObservingLifecycleEvents() {
+        lifecycle.stopObserving()
+    }
+    
+    /// Enable automatic model unloading when app goes to background
+    ///
+    /// - Parameter enabled: true to unload models on background, false to keep them
+    public func setAutoUnloadModelsOnBackground(_ enabled: Bool) {
+        lifecycle.setPauseInferenceOnBackground(enabled)
     }
 }

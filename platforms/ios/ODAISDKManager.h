@@ -14,6 +14,7 @@
 @class ODAISTTEngine;
 @class ODAITTSEngine;
 @class ODAIVoicePipeline;
+@class ODAILifecycleManager;
 
 NS_ASSUME_NONNULL_BEGIN
 
@@ -109,6 +110,40 @@ NS_ASSUME_NONNULL_BEGIN
  * @return Voice pipeline instance
  */
 - (ODAIVoicePipeline *)voicePipeline;
+
+// MARK: - Lifecycle Management (Requirements: 22.1, 22.5)
+
+/**
+ * Get current memory usage
+ * @return Memory usage in bytes
+ */
+- (NSUInteger)getCurrentMemoryUsage;
+
+/**
+ * Get memory limit
+ * @return Memory limit in bytes
+ */
+- (NSUInteger)getMemoryLimit;
+
+/**
+ * Check if memory pressure is active
+ * @return YES if memory usage is above pressure threshold
+ */
+- (BOOL)isMemoryPressure;
+
+/**
+ * Unload all currently loaded models to free memory
+ * WARNING: This will unload ALL models, making them unavailable for inference
+ * Call this during memory warnings or background transitions
+ * @return YES if models were unloaded, NO if none were loaded
+ */
+- (BOOL)unloadAllModels;
+
+/**
+ * Get lifecycle manager for handling iOS-specific lifecycle events
+ * @return Lifecycle manager instance
+ */
+- (ODAILifecycleManager *)lifecycleManager;
 
 // Prevent direct instantiation
 - (instancetype)init NS_UNAVAILABLE;

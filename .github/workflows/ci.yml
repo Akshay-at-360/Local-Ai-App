@@ -7,59 +7,71 @@ on:
     branches: [ main, develop ]
 
 jobs:
+  # =========================================================================
+  # Core C++ Build & Test (Linux, macOS, Windows)
+  # =========================================================================
   build-linux:
     runs-on: ubuntu-latest
     
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
     
     - name: Install dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y cmake ninja-build
+        sudo apt-get install -y cmake ninja-build lcov
     
     - name: Configure CMake
-      run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+      run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON
     
     - name: Build
-      run: cmake --build build
+      run: cmake --build build --parallel $(nproc)
     
     - name: Run tests
-      run: cd build && ctest --output-on-failure
+      run: cd build && ctest --output-on-failure --timeout 120
   
   build-macos:
     runs-on: macos-latest
     
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
     
     - name: Install dependencies
       run: brew install cmake ninja
     
     - name: Configure CMake
-      run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+      run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON
     
     - name: Build
-      run: cmake --build build
+      run: cmake --build build --parallel $(sysctl -n hw.logicalcpu)
     
     - name: Run tests
-      run: cd build && ctest --output-on-failure
+      run: cd build && ctest --output-on-failure --timeout 120
   
   build-windows:
     runs-on: windows-latest
     
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
     
     - name: Configure CMake
-      run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+      run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON
     
     - name: Build
-      run: cmake --build build --config Release
+      run: cmake --build build --config Release --parallel 4
     
     - name: Run tests
-      run: cd build && ctest -C Release --output-on-failure
-  
+      run: cd build && ctest -C Release --output-on-failure --timeout 120
+
+  # =========================================================================
+  # Sanitizers (AddressSanitizer + ThreadSanitizer)
+  # =========================================================================
   sanitizers:
     runs-on: ubuntu-latest
     
@@ -68,7 +80,9 @@ jobs:
         sanitizer: [address, thread]
     
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
     
     - name: Install dependencies
       run: |
@@ -78,13 +92,91 @@ jobs:
     - name: Configure CMake with ${{ matrix.sanitizer }} sanitizer
       run: |
         if [ "${{ matrix.sanitizer }}" = "address" ]; then
-          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DENABLE_ASAN=ON
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DENABLE_ASAN=ON -DBUILD_TESTS=ON
         else
-          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DENABLE_TSAN=ON
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DENABLE_TSAN=ON -DBUILD_TESTS=ON
         fi
     
     - name: Build
-      run: cmake --build build
+      run: cmake --build build --parallel $(nproc)
     
     - name: Run tests
-      run: cd build && ctest --output-on-failure
+      run: cd build && ctest --output-on-failure --timeout 180
+
+  # =========================================================================
+  # Code Coverage (gcov + lcov)
+  # =========================================================================
+  coverage:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+    
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y cmake ninja-build lcov
+    
+    - name: Configure with coverage flags
+      run: |
+        cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTS=ON \
+              -DCMAKE_CXX_FLAGS="--coverage -fprofile-arcs -ftest-coverage" \
+              -DCMAKE_C_FLAGS="--coverage -fprofile-arcs -ftest-coverage"
+    
+    - name: Build
+      run: cmake --build build --parallel $(nproc)
+    
+    - name: Run tests
+      run: cd build && ctest --output-on-failure --timeout 120
+
+    - name: Collect coverage
+      run: |
+        lcov --capture --directory build --output-file coverage.info \
+             --ignore-errors gcov,source
+        lcov --remove coverage.info \
+             '*/tests/*' '*/build/*' '/usr/*' '*/llama.cpp/*' '*/whisper.cpp/*' \
+             '*/onnxruntime/*' '*/googletest/*' '*/rapidcheck/*' \
+             --output-file coverage_filtered.info
+        lcov --summary coverage_filtered.info
+
+    - name: Upload coverage artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage-report
+        path: coverage_filtered.info
+
+  # =========================================================================
+  # Performance Benchmarks
+  # =========================================================================
+  benchmarks:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+    
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y cmake ninja-build
+    
+    - name: Build benchmarks
+      run: |
+        cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON
+        cmake --build build --parallel $(nproc)
+    
+    - name: Run benchmarks
+      run: |
+        mkdir -p test_reports
+        cd build && ctest -L benchmark --output-on-failure --timeout 300 || true
+    
+    - name: Upload benchmark results
+      uses: actions/upload-artifact@v4
+      with:
+        name: benchmark-report
+        path: test_reports/
+      if: always()
